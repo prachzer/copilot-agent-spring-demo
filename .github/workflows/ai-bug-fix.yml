@@ -39,6 +39,7 @@ jobs:
           GEMINI_CLI_TRUST_WORKSPACE: "true"
         with:
           gemini_api_key: ${{ secrets.GEMINI_API_KEY }}
+          gemini_model: gemini-3.5-flash-lite
           github_issue_number: ${{ github.event.issue.number }}
           prompt: |
             You are an expert Spring Boot software engineer AI assistant.
