@@ -1,3 +1,4 @@
+
 name: AI Bug Fixer
 
 on:
@@ -11,9 +12,16 @@ permissions:
 
 jobs:
   ai-bug-fix:
-    # Only run if the issue is a bug or explicitly labeled for AI fixing
-    if: github.event.issue.state == 'open' && (contains(github.event.issue.labels.*.name, 'bug') || contains(github.event.issue.labels.*.name, 'ai-fix'))
+    if: >-
+      github.event.issue.state == 'open' &&
+      (
+        contains(github.event.issue.labels.*.name, 'bug') ||
+        contains(github.event.issue.labels.*.name, 'ai-fix')
+      )
+
     runs-on: ubuntu-latest
+    timeout-minutes: 30
+
     steps:
       - name: Checkout Repository
         uses: actions/checkout@v4
@@ -23,16 +31,18 @@ jobs:
       - name: Set up Java 21
         uses: actions/setup-java@v4
         with:
-          distribution: 'temurin'
+          distribution: temurin
           java-version: '21'
           cache: maven
 
       - name: Configure Git Author
         run: |
-          git config --global user.name "gemini-ai-bot[bot]"
-          git config --global user.email "gemini-ai-bot[bot]@users.noreply.github.com"
+          git config user.name "gemini-ai-bot[bot]"
+          git config user.email \
+            "gemini-ai-bot[bot]@users.noreply.github.com"
 
       - name: Run Gemini CLI Bug Fixer
+        id: gemini
         uses: google-github-actions/run-gemini-cli@v0
         env:
           GH_TOKEN: ${{ github.token }}
@@ -42,21 +52,82 @@ jobs:
           gemini_model: gemini-3.5-flash-lite
           github_issue_number: ${{ github.event.issue.number }}
           prompt: |
-            You are an expert Spring Boot software engineer AI assistant.
-            A GitHub issue has been opened or labeled for AI fixing (Issue #${{ github.event.issue.number }}).
-            
-            Please execute the following steps carefully:
-            1. Read the GitHub issue details using: gh issue view ${{ github.event.issue.number }}
-            2. Inspect the relevant repository files (such as pom.xml, service classes, controllers, and tests).
-            3. Identify the root cause of the bug described in the issue.
-            4. Implement a clean, minimal fix for the bug in the source code, and add or update unit tests to verify the fix.
-            5. Run `./mvnw clean test` to ensure all tests pass successfully.
-            6. Create a dedicated branch named `ai-fix/issue-${{ github.event.issue.number }}`.
-            7. Commit your changes with a clear commit message.
-            8. Open a pull request targeting `main` using `gh pr create --title "AI Fix: Issue #${{ github.event.issue.number }}" --body "Automated fix for issue #${{ github.event.issue.number }} by Gemini CLI."`.
-            
-            IMPORTANT CONSTRAINTS:
-            - Never push directly to main.
-            - Never merge pull requests automatically.
-            - Never bypass human review.
-            - Do not hardcode, display, log, or expose API keys or secrets.
+            You are a Spring Boot bug-fixing engineer.
+
+            Task: fix GitHub Issue #${{ github.event.issue.number }}
+            in the checked-out repository.
+
+            Instructions:
+            1. Read the issue using:
+               gh issue view ${{ github.event.issue.number }}
+            2. Inspect the relevant source files and existing tests.
+            3. Identify the root cause before editing.
+            4. Implement the smallest correct fix.
+            5. Add or update relevant unit tests.
+            6. Do not modify unrelated files.
+            7. Do not create branches, commits, pushes or pull requests.
+               GitHub Actions will handle those steps.
+            8. Do not merge anything or change the main branch.
+            9. Never reveal secrets or API keys.
+            10. Finish by reporting the files changed and the
+                reason for the fix.
+
+      - name: Check for Code Changes
+        id: changes
+        shell: bash
+        run: |
+          git status --short
+          if [ -z "$(git status --porcelain)" ]; then
+            echo "::error::Gemini finished without changing any files."
+            exit 1
+          fi
+
+      - name: Run Maven Tests
+        id: tests
+        run: |
+          chmod +x ./mvnw
+          ./mvnw clean test
+
+      - name: Create Branch and Commit
+        id: commit
+        env:
+          ISSUE_NUMBER: ${{ github.event.issue.number }}
+        shell: bash
+        run: |
+          BRANCH="ai-fix/issue-${ISSUE_NUMBER}"
+
+          git switch -c "$BRANCH"
+          git add -u
+          git add .
+          git diff --cached --check
+
+          if git diff --cached --quiet; then
+            echo "::error::No changes to commit."
+            exit 1
+          fi
+
+          git commit -m "fix: resolve issue #${ISSUE_NUMBER}"
+          echo "branch=$BRANCH" >> "$GITHUB_OUTPUT"
+
+      - name: Push Branch
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          git push --set-upstream origin \
+            "${{ steps.commit.outputs.branch }}"
+
+      - name: Create Pull Request
+        env:
+          GH_TOKEN: ${{ github.token }}
+          ISSUE_NUMBER: ${{ github.event.issue.number }}
+          BRANCH: ${{ steps.commit.outputs.branch }}
+        run: |
+          gh pr create \
+            --base main \
+            --head "$BRANCH" \
+            --title "AI Fix: Issue #${ISSUE_NUMBER}" \
+            --body "Automated fix for #${ISSUE_NUMBER} by Gemini CLI.
+
+          - Generated changes reviewed by CI
+          - Maven tests passed
+          - Human review and merge required"
