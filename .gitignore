@@ -3,4 +3,4 @@
 /gemini-artifacts/
 
 # Maven build output
-/target/
+/target//gemini/artifacts/
