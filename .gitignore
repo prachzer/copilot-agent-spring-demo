@@ -1,3 +1,6 @@
-.gimini/commands/
-gimini-artifacts/
-target/
+# Gemini CLI generated files
+/.gemini/commands/
+/gemini-artifacts/
+
+# Maven build output
+/target/
