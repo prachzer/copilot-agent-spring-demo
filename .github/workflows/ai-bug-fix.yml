@@ -10,6 +10,10 @@ permissions:
   pull-requests: write
   issues: write
 
+concurrency:
+  group: ai-bug-fixer-issue-${{ github.event.issue.number }}
+  cancel-in-progress: false
+
 jobs:
   ai-bug-fix:
     if: >-
@@ -36,6 +40,7 @@ jobs:
           cache: maven
 
       - name: Configure Git Author
+        shell: bash
         run: |
           git config user.name "gemini-ai-bot[bot]"
           git config user.email \
@@ -60,7 +65,7 @@ jobs:
             Instructions:
             1. Read the issue using:
                gh issue view ${{ github.event.issue.number }}
-            2. Inspect the relevant source files and existing tests.
+            2. Inspect relevant source files and existing tests.
             3. Identify the root cause before editing.
             4. Implement the smallest correct fix.
             5. Add or update relevant unit tests.
@@ -69,14 +74,39 @@ jobs:
                GitHub Actions will handle those steps.
             8. Do not merge anything or change the main branch.
             9. Never reveal secrets or API keys.
-            10. Finish by reporting the files changed and the
+            10. Do not modify .gitignore or workflow files.
+            11. Finish by reporting the files changed and the
                 reason for the fix.
+
+      - name: Ignore Gemini Generated Files
+        shell: bash
+        run: |
+          # Ensure generated files are ignored in this runner.
+          touch .gitignore
+
+          for path in \
+            "/.gemini/commands/" \
+            "/gemini/artifacts/"
+          do
+            if ! grep -Fqx "$path" .gitignore; then
+              printf '%s\n' "$path" >> .gitignore
+            fi
+          done
+
+          echo "=== Gemini files ignored by Git ==="
+          git check-ignore -v \
+            .gemini/commands/gemini-invoke.toml \
+            .gemini/commands/gemini-issue-fixer.toml \
+            gemini/artifacts/stderr.log || true
 
       - name: Check for Code Changes
         id: changes
         shell: bash
         run: |
+          echo "=== Working tree status ==="
           git status --short
+
+          # Check tracked changes and untracked, non-ignored files.
           if [ -z "$(git status --porcelain)" ]; then
             echo "::error::Gemini finished without changing any files."
             exit 1
@@ -84,6 +114,7 @@ jobs:
 
       - name: Run Maven Tests
         id: tests
+        shell: bash
         run: |
           chmod +x ./mvnw
           ./mvnw clean test
@@ -94,11 +125,16 @@ jobs:
           ISSUE_NUMBER: ${{ github.event.issue.number }}
         shell: bash
         run: |
-          BRANCH="ai-fix/issue-${ISSUE_NUMBER}"
+          BRANCH="ai-fix/issue-${ISSUE_NUMBER}-${GITHUB_RUN_ID}"
 
           git switch -c "$BRANCH"
-          git add -u
-          git add .
+
+          # Stage all intended changes while respecting .gitignore.
+          git add -A
+
+          echo "=== Files staged for commit ==="
+          git diff --cached --name-status
+
           git diff --cached --check
 
           if git diff --cached --quiet; then
@@ -111,17 +147,31 @@ jobs:
 
       - name: Push Branch
         env:
-          GH_TOKEN: ${{ github.token }}
+          BRANCH: ${{ steps.commit.outputs.branch }}
+        shell: bash
         run: |
-          git push --set-upstream origin \
-            "${{ steps.commit.outputs.branch }}"
+          git push --set-upstream origin "$BRANCH"
 
       - name: Create Pull Request
         env:
           GH_TOKEN: ${{ github.token }}
           ISSUE_NUMBER: ${{ github.event.issue.number }}
           BRANCH: ${{ steps.commit.outputs.branch }}
+        shell: bash
         run: |
+          # Avoid opening a duplicate PR for the same branch.
+          EXISTING_PR="$(gh pr list \
+            --base main \
+            --head "$BRANCH" \
+            --state open \
+            --json number \
+            --jq '.[0].number')"
+
+          if [ -n "$EXISTING_PR" ]; then
+            echo "An open PR already exists: #${EXISTING_PR}"
+            exit 0
+          fi
+
           gh pr create \
             --base main \
             --head "$BRANCH" \
