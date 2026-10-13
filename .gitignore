@@ -1,3 +1,5 @@
 .gimini/commands/
 gimini-artifacts/
 target/
+/.gemini/commands/
+/gemini/artifacts/
