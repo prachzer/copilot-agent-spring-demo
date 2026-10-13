@@ -19,7 +19,8 @@ public class ProductService {
         return products.stream()
                 .filter(product -> category == null
                         || product.category().equalsIgnoreCase(category))
-                // DEMO BUG: maxPrice is intentionally ignored
+                .filter(product -> maxPrice == null
+                        || product.price() <= maxPrice)
                 .toList();
     }
 }
