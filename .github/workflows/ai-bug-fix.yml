@@ -130,7 +130,7 @@ jobs:
           git switch -c "$BRANCH"
 
           # Stage all intended changes while respecting .gitignore.
-          git add -A
+          git add -A -- src pom.xml
 
           echo "=== Files staged for commit ==="
           git diff --cached --name-status
